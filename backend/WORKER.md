@@ -1,15 +1,47 @@
-# Background worker
+# Background worker and ACE-Step connection
 
-The worker polls queued jobs and conditionally claims them before processing. It stores output under an opaque local storage key and creates a Track record only when a model runner returns non-empty audio and a positive duration.
+The worker polls queued jobs, claims them conditionally, calls the configured model runner, stores output under an opaque local key, and creates a Track only for non-empty audio with a positive duration.
 
-## Run locally
+## Run the API and worker locally
 
-From backend/, install dependencies with `pip install -e ".[dev]"`. Run the API in one terminal with `uvicorn app.main:app --reload`, and the worker in another with `python -m app.worker`.
+From `backend/`:
 
-The API and worker must use the same database and audio storage directory. Set `AUDIO_STORAGE_DIR` in the environment or configure `audio_storage_dir` in `.env`.
+```bash
+pip install -e ".[dev]"
+uvicorn app.main:app --reload
+```
 
-## Current limitation
+In another terminal, run:
 
-The default runner is intentionally unconfigured. It fails jobs with a clear message rather than returning fake audio. No music model is installed or integrated yet. Implement MusicModelRunner only after selecting a model whose licence permits the intended use.
+```bash
+python -m app.worker
+```
 
-Local disk storage is for development and single-machine testing, not multi-instance production. Production needs private object storage, authentication and authorization, request limits, monitoring, backups, retention rules, and a reliable queue/worker deployment. The generation API now returns HTTP 503 outside development until authentication and abuse controls are configured.
+The API and worker must use the same database and audio storage directory. Copy `.env.example` to `.env` and configure `DATABASE_URL` and `AUDIO_STORAGE_DIR` as needed.
+
+## Connect a self-hosted ACE-Step 1.5 server
+
+MyMusic AI now has an HTTP adapter for the documented ACE-Step asynchronous API. It does not install or host the model itself. Install ACE-Step on a machine with suitable compute, start its API on a private network, then set these variables in MyMusic AI's backend environment:
+
+```dotenv
+MUSIC_MODEL_BACKEND=ace_step
+ACE_STEP_BASE_URL=http://127.0.0.1:8001
+ACE_STEP_API_KEY=your-secret-if-configured-on-ACE-Step
+ACE_STEP_TIMEOUT_SECONDS=900
+ACE_STEP_POLL_SECONDS=2
+DEFAULT_GENERATION_DURATION_SECONDS=30
+AUDIO_STORAGE_DIR=./audio_storage
+```
+
+If ACE-Step is on a different machine, replace `127.0.0.1` with its private reachable address. Do not expose the model service publicly without network restrictions and API-key authentication. Use the same `DATABASE_URL` for the API and worker. Start the ACE-Step API using its official instructions: https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md
+
+The adapter submits a `/release_task`, polls `/query_result`, and downloads the resulting WAV through `/v1/audio`. It requests one track at a time and uses the configured default duration (clamped to the model's documented 10–600 second range). Instrumental requests add an explicit no-vocals instruction; actual adherence depends on the model.
+
+## Current limitations and safety
+
+- Default `MUSIC_MODEL_BACKEND=unconfigured` deliberately refuses to fake audio. Change it to `ace_step` only after the ACE-Step service is running.
+- This connection has not yet been verified against a running model instance, and no actual song has been generated from this repository yet.
+- Generation endpoints return HTTP 503 outside development because authentication and abuse controls are not implemented.
+- Local disk storage is for development/single-machine testing. Production needs authenticated users, per-user ownership, rate limits/quotas, private object storage, database migrations, monitoring, backups, retention rules, and a reliable queue.
+- If the worker process is killed after claiming a job, that job may remain `running`; stale-job recovery is still needed before production.
+- Verify the model version, checkpoint and license for your intended use. See `docs/MUSIC_MODEL_EVALUATION.md`.
