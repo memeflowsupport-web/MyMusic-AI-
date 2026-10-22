@@ -49,10 +49,6 @@ class UserResponse(BaseModel):
 
 # Temporary per-process guard. It reduces accidental bursts but is NOT a
 # distributed production rate limiter: use Redis/edge limits before enabling auth.
-_RATE_LIMITS: dict[str, dict[str, object]] = {
-    "register": {"limit": settings.auth_register_limit, "window": settings.auth_register_window_seconds},
-    "login": {"limit": settings.auth_login_limit, "window": settings.auth_login_window_seconds},
-}
 _attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 _attempts_lock = Lock()
 
@@ -63,9 +59,14 @@ def _client_key(request: Request) -> str:
 
 
 def _check_rate_limit(action: str, request: Request) -> None:
-    policy = _RATE_LIMITS[action]
-    limit = int(policy["limit"])
-    window = float(policy["window"])
+    if action == "register":
+        limit = settings.auth_register_limit
+        window = float(settings.auth_register_window_seconds)
+    elif action == "login":
+        limit = settings.auth_login_limit
+        window = float(settings.auth_login_window_seconds)
+    else:
+        raise ValueError("Unknown authentication rate-limit action")
     now = monotonic()
     key = (action, _client_key(request))
     with _attempts_lock:
