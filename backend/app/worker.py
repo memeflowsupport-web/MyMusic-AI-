@@ -1,7 +1,7 @@
 """Polling worker foundation. No audio is generated until a real model is configured."""
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -60,6 +60,37 @@ def process_one(
         job.updated_at = datetime.now(timezone.utc)
         session.commit()
         return True
+
+
+
+def fail_stale_running_jobs(
+    session_factory: sessionmaker[Session] = SessionLocal,
+    stale_after_seconds: int = 3600,
+) -> int:
+    """Mark old running jobs failed after an operator confirms workers are stopped.
+
+    This is intentionally not called automatically: a long-running live model
+    request must not be marked failed while its worker is still generating.
+    Returns the number of jobs changed.
+    """
+    if stale_after_seconds < 1:
+        raise ValueError("stale_after_seconds must be at least 1.")
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    with session_factory() as session:
+        result = session.execute(
+            update(GenerationJob)
+            .where(
+                GenerationJob.status == "running",
+                GenerationJob.updated_at < cutoff,
+            )
+            .values(
+                status="failed",
+                error_message="Worker stopped before completing this job. Please submit a new generation request.",
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        return result.rowcount or 0
 
 
 def run_forever(poll_seconds: float = 2.0) -> None:
