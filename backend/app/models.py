@@ -50,3 +50,4 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    generation_jobs: Mapped[list["GenerationJob"]] = relationship(back_populates="owner")
