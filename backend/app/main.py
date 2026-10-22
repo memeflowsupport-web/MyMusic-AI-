@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base, engine, get_db
 from app import models  # noqa: F401
-from app.models import GenerationJob
-from app.schemas import GenerationJobCreate, GenerationJobRead
+from app.models import GenerationJob, Track
+from app.schemas import GenerationJobCreate, GenerationJobRead, TrackRead
 
 
 @asynccontextmanager
@@ -107,3 +107,20 @@ def get_generation_job(job_id: str, db: Session = Depends(get_db)) -> Generation
     if job is None:
         raise HTTPException(status_code=404, detail="Generation job not found")
     return job
+
+@app.get(f"{settings.api_prefix}/tracks", response_model=list[TrackRead], tags=["tracks"], dependencies=[Depends(require_development_mode)])
+def list_tracks(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[Track]:
+    """List saved track metadata, newest first. Audio files are not exposed publicly."""
+    return list(db.scalars(select(Track).order_by(Track.created_at.desc()).limit(limit)))
+
+
+@app.get(f"{settings.api_prefix}/tracks/{track_id}", response_model=TrackRead, tags=["tracks"], dependencies=[Depends(require_development_mode)])
+def get_track(track_id: str, db: Session = Depends(get_db)) -> Track:
+    track = db.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return track
+
