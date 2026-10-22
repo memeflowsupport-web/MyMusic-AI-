@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     auth_enabled: bool = False
     auth_secret_key: str = ""
     access_token_expire_minutes: int = 30
+    # In-process throttles are interim only; production must use a shared limiter.
+    auth_register_limit: int = 5
+    auth_register_window_seconds: int = 3600
+    auth_login_limit: int = 10
+    auth_login_window_seconds: int = 900
 
     @property
     def allowed_origins(self) -> list[str]:
