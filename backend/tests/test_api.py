@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import settings
 from app.db import Base, get_db
 from app import models  # noqa: F401
-from app.models import GenerationJob, Track
+from app.models import GenerationJob, Track, User
 from app.storage import LocalAudioStorage
 from app.main import app
 
@@ -222,3 +222,59 @@ def test_interactive_api_docs_are_available_in_development():
     assert client.get("/docs").status_code == 200
     assert client.get("/redoc").status_code == 200
     assert client.get("/openapi.json").status_code == 200
+
+
+
+def test_authentication_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 40)
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "disabled@example.com", "password": "long-enough-test-password"},
+    )
+    assert response.status_code == 503
+
+
+def test_register_login_and_current_user(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    email = "auth-flow@example.com"
+    with TestingSessionLocal() as session:
+        session.query(User).filter(User.email == email).delete()
+        session.commit()
+
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert registration.status_code == 201
+    assert registration.json()["email"] == email
+    assert "password" not in registration.json()
+    assert "password_hash" not in registration.json()
+
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert duplicate.status_code == 409
+
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert login_response.status_code == 200
+    token_data = login_response.json()
+    assert token_data["token_type"] == "bearer"
+    assert token_data["expires_in"] == settings.access_token_expire_minutes * 60
+
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token_data['access_token']}"})
+    assert me.status_code == 200
+    assert me.json()["id"] == registration.json()["id"]
+    assert me.json()["email"] == email
+
+
+def test_auth_me_rejects_invalid_token(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer not-a-valid-token"})
+    assert response.status_code == 401
