@@ -31,6 +31,13 @@ def test_health_reports_engine_not_connected():
     assert response.json()["music_engine"] == "not_connected"
 
 
+def test_health_does_not_claim_configured_engine_is_reachable(monkeypatch):
+    monkeypatch.setattr(settings, "music_model_backend", "ace_step")
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["music_engine"] == "configured_unverified"
+
+
 def test_create_generation_job_queues_without_claiming_generation():
     response = client.post("/api/v1/generation-jobs", json={"prompt": "Warm Nigerian Afrobeats groove", "style": "Afrobeats", "instrumental": True})
     assert response.status_code == 202
