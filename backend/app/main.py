@@ -22,11 +22,17 @@ async def lifespan(_: FastAPI):
     yield
 
 
+# Keep interactive API documentation available for local development only.
+# Hiding docs is defense-in-depth, not a replacement for endpoint authorization.
+is_development = settings.environment == "development"
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="Self-hostable API foundation. No music model is connected yet.",
     lifespan=lifespan,
+    docs_url="/docs" if is_development else None,
+    redoc_url="/redoc" if is_development else None,
+    openapi_url="/openapi.json" if is_development else None,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -48,7 +54,10 @@ def require_development_mode() -> None:
 
 @app.get("/", tags=["system"])
 def root() -> dict[str, str]:
-    return {"name": settings.app_name, "status": "ok", "docs": "/docs"}
+    response = {"name": settings.app_name, "status": "ok"}
+    if settings.environment == "development":
+        response["docs"] = "/docs"
+    return response
 
 
 @app.get("/health", tags=["system"])

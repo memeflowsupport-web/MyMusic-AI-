@@ -214,3 +214,11 @@ def test_audio_endpoint_is_disabled_outside_development(monkeypatch):
     monkeypatch.setattr(settings, "environment", "production")
     response = client.get("/api/v1/tracks/some-track-id/audio")
     assert response.status_code == 503
+
+
+
+def test_interactive_api_docs_are_available_in_development():
+    # The test app is initialized with the development environment by default.
+    assert client.get("/docs").status_code == 200
+    assert client.get("/redoc").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
