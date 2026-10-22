@@ -91,3 +91,18 @@ def test_system_status_shows_generation_disabled_in_production(monkeypatch):
     assert data["generation_api_enabled"] is False
     assert data["production_auth_ready"] is False
 
+
+
+def test_track_library_endpoints_exist():
+    response = client.get('/api/v1/tracks')
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+def test_unknown_track_returns_404():
+    response = client.get('/api/v1/tracks/not-a-real-id')
+    assert response.status_code == 404
+
+def test_track_library_is_disabled_outside_development(monkeypatch):
+    monkeypatch.setattr(settings, 'environment', 'production')
+    response = client.get('/api/v1/tracks')
+    assert response.status_code == 503
