@@ -1,14 +1,14 @@
 from collections.abc import Generator
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import settings
 from app.db import Base, get_db
 from app import models  # noqa: F401
-from app.models import GenerationJob, Track
+from app.models import GenerationJob, Track, User
 from app.storage import LocalAudioStorage
 from app.main import app
 
@@ -222,3 +222,119 @@ def test_interactive_api_docs_are_available_in_development():
     assert client.get("/docs").status_code == 200
     assert client.get("/redoc").status_code == 200
     assert client.get("/openapi.json").status_code == 200
+
+
+
+def test_authentication_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "auth_secret_key", "x" * 40)
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "disabled@example.com", "password": "long-enough-test-password"},
+    )
+    assert response.status_code == 503
+
+
+def test_register_login_and_current_user(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    email = "auth-flow@example.com"
+    with TestingSessionLocal() as session:
+        session.query(User).filter(User.email == email).delete()
+        session.commit()
+
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert registration.status_code == 201
+    assert registration.json()["email"] == email
+    assert "password" not in registration.json()
+    assert "password_hash" not in registration.json()
+
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert duplicate.status_code == 409
+
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "a-strong-test-password-123"},
+    )
+    assert login_response.status_code == 200
+    token_data = login_response.json()
+    assert token_data["token_type"] == "bearer"
+    assert token_data["expires_in"] == settings.access_token_expire_minutes * 60
+
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token_data['access_token']}"})
+    assert me.status_code == 200
+    assert me.json()["id"] == registration.json()["id"]
+    assert me.json()["email"] == email
+
+
+def test_auth_me_rejects_invalid_token(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer not-a-valid-token"})
+    assert response.status_code == 401
+
+
+def test_authenticated_job_is_hidden_from_other_user(monkeypatch):
+    from uuid import uuid4
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    suffix = str(uuid4())
+    tokens = []
+    for label in ("a", "b"):
+        email = f"ownership-{label}-{suffix}@example.com"
+        assert client.post("/api/v1/auth/register", json={"email": email, "password": "owner-test-password-123"}).status_code == 201
+        response = client.post("/api/v1/auth/login", json={"email": email, "password": "owner-test-password-123"})
+        assert response.status_code == 200
+        tokens.append(response.json()["access_token"])
+    created = client.post("/api/v1/generation-jobs", json={"prompt": "Private song owned by user A"}, headers={"Authorization": f"Bearer {tokens[0]}"})
+    assert created.status_code == 202
+    job_id = created.json()["id"]
+    assert client.get(f"/api/v1/generation-jobs/{job_id}", headers={"Authorization": f"Bearer {tokens[0]}"}).status_code == 200
+    assert client.get(f"/api/v1/generation-jobs/{job_id}", headers={"Authorization": f"Bearer {tokens[1]}"}).status_code == 404
+    listing = client.get("/api/v1/generation-jobs", headers={"Authorization": f"Bearer {tokens[1]}"})
+    assert all(job["id"] != job_id for job in listing.json())
+
+
+def test_authenticated_track_metadata_and_audio_are_private(monkeypatch, tmp_path):
+    from uuid import uuid4
+
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    monkeypatch.setattr(settings, "audio_storage_dir", str(tmp_path))
+    suffix = str(uuid4())
+    tokens = []
+    for label in ("a", "b"):
+        email = f"track-owner-{label}-{suffix}@example.com"
+        assert client.post("/api/v1/auth/register", json={"email": email, "password": "owner-test-password-123"}).status_code == 201
+        login = client.post("/api/v1/auth/login", json={"email": email, "password": "owner-test-password-123"})
+        assert login.status_code == 200
+        tokens.append(login.json()["access_token"])
+
+    audio_key = LocalAudioStorage(tmp_path).save(b"private-audio-bytes", ".wav")
+    with TestingSessionLocal() as session:
+        owner_id = session.scalar(select(User.id).where(User.email == f"track-owner-a-{suffix}@example.com"))
+        job = GenerationJob(prompt="Private track A", status="succeeded", owner_id=owner_id)
+        session.add(job)
+        session.flush()
+        track = Track(job_id=job.id, title="Private track A", audio_key=audio_key, duration_seconds=5)
+        session.add(track)
+        session.commit()
+        track_id = track.id
+
+    owner_headers = {"Authorization": f"Bearer {tokens[0]}"}
+    other_headers = {"Authorization": f"Bearer {tokens[1]}"}
+    assert client.get(f"/api/v1/tracks/{track_id}", headers=owner_headers).status_code == 200
+    assert client.get(f"/api/v1/tracks/{track_id}/audio", headers=owner_headers).content == b"private-audio-bytes"
+    assert client.get(f"/api/v1/tracks/{track_id}", headers=other_headers).status_code == 404
+    assert client.get(f"/api/v1/tracks/{track_id}/audio", headers=other_headers).status_code == 404
+    other_listing = client.get("/api/v1/tracks", headers=other_headers)
+    assert other_listing.status_code == 200
+    assert all(track["id"] != track_id for track in other_listing.json())

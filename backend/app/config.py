@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     ace_step_timeout_seconds: int = 900
     ace_step_poll_seconds: float = 2.0
     default_generation_duration_seconds: int = 30
+    auth_enabled: bool = False
+    auth_secret_key: str = ""
+    access_token_expire_minutes: int = 30
 
     @property
     def allowed_origins(self) -> list[str]:
