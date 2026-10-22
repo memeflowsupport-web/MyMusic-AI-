@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db import Base, engine, get_db
@@ -56,7 +56,6 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok", "database": "ok", "music_engine": engine}
 
 
-
 @app.get(f"{settings.api_prefix}/system/status", tags=["system"])
 def system_status() -> dict[str, str | bool]:
     """Report setup readiness without exposing secrets or claiming model reachability."""
@@ -98,15 +97,18 @@ def list_generation_jobs(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> list[GenerationJob]:
-    return list(db.scalars(select(GenerationJob).order_by(GenerationJob.created_at.desc()).limit(limit)))
+    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).order_by(GenerationJob.created_at.desc()).limit(limit)
+    return list(db.scalars(statement))
 
 
 @app.get(f"{settings.api_prefix}/generation-jobs/{{job_id}}", response_model=GenerationJobRead, tags=["generation"], dependencies=[Depends(require_development_mode)])
 def get_generation_job(job_id: str, db: Session = Depends(get_db)) -> GenerationJob:
-    job = db.get(GenerationJob, job_id)
+    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).where(GenerationJob.id == job_id)
+    job = db.scalar(statement)
     if job is None:
         raise HTTPException(status_code=404, detail="Generation job not found")
     return job
+
 
 @app.get(f"{settings.api_prefix}/tracks", response_model=list[TrackRead], tags=["tracks"], dependencies=[Depends(require_development_mode)])
 def list_tracks(
@@ -117,10 +119,9 @@ def list_tracks(
     return list(db.scalars(select(Track).order_by(Track.created_at.desc()).limit(limit)))
 
 
-@app.get(f"{settings.api_prefix}/tracks/{track_id}", response_model=TrackRead, tags=["tracks"], dependencies=[Depends(require_development_mode)])
+@app.get(f"{settings.api_prefix}/tracks/{{track_id}}", response_model=TrackRead, tags=["tracks"], dependencies=[Depends(require_development_mode)])
 def get_track(track_id: str, db: Session = Depends(get_db)) -> Track:
     track = db.get(Track, track_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return track
-
