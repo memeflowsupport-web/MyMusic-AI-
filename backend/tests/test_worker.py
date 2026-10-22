@@ -7,7 +7,7 @@ from app.db import Base
 from app.model_runner import GeneratedAudio, ModelNotConfiguredError
 from app.models import GenerationJob, Track
 from app.storage import LocalAudioStorage
-from app.worker import process_one
+from app.worker import fail_stale_running_jobs, process_one
 
 
 @pytest.fixture
@@ -97,3 +97,36 @@ def test_storage_rejects_path_traversal(tmp_path):
         storage.read("../secret.txt")
     with pytest.raises(ValueError):
         storage.save(b"audio", "../txt")
+
+
+
+def test_stale_recovery_fails_only_old_running_jobs(session_factory):
+    from datetime import datetime, timedelta, timezone
+
+    with session_factory() as session:
+        old = GenerationJob(
+            prompt="Old interrupted job",
+            status="running",
+            updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        recent = GenerationJob(
+            prompt="Still running",
+            status="running",
+            updated_at=datetime.now(timezone.utc),
+        )
+        queued = GenerationJob(prompt="Waiting", status="queued")
+        session.add_all([old, recent, queued])
+        session.commit()
+        old_id, recent_id, queued_id = old.id, recent.id, queued.id
+
+    assert fail_stale_running_jobs(session_factory, stale_after_seconds=3600) == 1
+    with session_factory() as session:
+        assert session.get(GenerationJob, old_id).status == "failed"
+        assert "Worker stopped" in session.get(GenerationJob, old_id).error_message
+        assert session.get(GenerationJob, recent_id).status == "running"
+        assert session.get(GenerationJob, queued_id).status == "queued"
+
+
+def test_stale_recovery_rejects_invalid_threshold(session_factory):
+    with pytest.raises(ValueError):
+        fail_stale_running_jobs(session_factory, stale_after_seconds=0)
