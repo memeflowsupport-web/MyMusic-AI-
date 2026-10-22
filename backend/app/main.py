@@ -12,6 +12,7 @@ from app import models  # noqa: F401
 from app.models import GenerationJob, Track
 from app.storage import LocalAudioStorage
 from app.schemas import GenerationJobCreate, GenerationJobRead, TrackRead
+from app.auth import router as auth_router
 
 
 @asynccontextmanager
@@ -34,6 +35,8 @@ app = FastAPI(
     redoc_url="/redoc" if is_development else None,
     openapi_url="/openapi.json" if is_development else None,
 )
+app.include_router(auth_router, prefix=settings.api_prefix)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
