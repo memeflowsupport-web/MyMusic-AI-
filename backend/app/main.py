@@ -7,14 +7,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import Base, engine, get_db
-from app import models  # noqa: F401 - registers SQLAlchemy models
+from app import models  # noqa: F401
 from app.models import GenerationJob
 from app.schemas import GenerationJobCreate, GenerationJobRead
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Convenience for local prototype only. Production should use versioned migrations.
+    # Local prototype only. Production should use versioned migrations.
     if settings.environment == "development":
         Base.metadata.create_all(bind=engine)
     yield
@@ -23,7 +23,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    description="Self-hostable API foundation. Jobs are queued only; no music model is connected yet.",
+    description="Self-hostable API foundation. No music model is connected yet.",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -33,6 +33,15 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+
+def require_development_mode() -> None:
+    # There is no user authentication yet. Fail closed outside local development.
+    if settings.environment != "development":
+        raise HTTPException(
+            status_code=503,
+            detail="Generation API is disabled until authentication and abuse controls are configured.",
+        )
 
 
 @app.get("/", tags=["system"])
@@ -46,7 +55,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok", "database": "ok", "music_engine": "not_connected"}
 
 
-@app.post(f"{settings.api_prefix}/generation-jobs", response_model=GenerationJobRead, status_code=202, tags=["generation"])
+@app.post(f"{settings.api_prefix}/generation-jobs", response_model=GenerationJobRead, status_code=202, tags=["generation"], dependencies=[Depends(require_development_mode)])
 def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(get_db)) -> GenerationJob:
     job = GenerationJob(
         prompt=payload.prompt.strip(),
@@ -60,7 +69,7 @@ def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(ge
     return job
 
 
-@app.get(f"{settings.api_prefix}/generation-jobs", response_model=list[GenerationJobRead], tags=["generation"])
+@app.get(f"{settings.api_prefix}/generation-jobs", response_model=list[GenerationJobRead], tags=["generation"], dependencies=[Depends(require_development_mode)])
 def list_generation_jobs(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -68,7 +77,7 @@ def list_generation_jobs(
     return list(db.scalars(select(GenerationJob).order_by(GenerationJob.created_at.desc()).limit(limit)))
 
 
-@app.get(f"{settings.api_prefix}/generation-jobs/{{job_id}}", response_model=GenerationJobRead, tags=["generation"])
+@app.get(f"{settings.api_prefix}/generation-jobs/{{job_id}}", response_model=GenerationJobRead, tags=["generation"], dependencies=[Depends(require_development_mode)])
 def get_generation_job(job_id: str, db: Session = Depends(get_db)) -> GenerationJob:
     job = db.get(GenerationJob, job_id)
     if job is None:
