@@ -100,3 +100,21 @@ def test_ace_step_rejects_malformed_result_json():
 def test_ace_step_requires_positive_timeout():
     with pytest.raises(ValueError, match="at least 1 second"):
         AceStepHttpRunner(base_url="http://127.0.0.1:8001", timeout_seconds=0)
+
+def test_ace_step_rejects_json_that_is_not_an_object(monkeypatch):
+    class FakeResponse:
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    monkeypatch.setattr("app.ace_step_runner.urlopen", lambda *args, **kwargs: FakeResponse())
+    runner = AceStepHttpRunner(base_url="http://127.0.0.1:8001", timeout_seconds=5)
+    with pytest.raises(AceStepError, match="not an object"):
+        runner._request("/release_task", {"prompt": "test"})
