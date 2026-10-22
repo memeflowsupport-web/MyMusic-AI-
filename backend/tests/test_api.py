@@ -1,5 +1,7 @@
 from collections.abc import Generator
 
+import pytest
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +26,17 @@ def override_get_db() -> Generator[Session, None, None]:
 
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_rate_limits():
+    from app import auth as auth_module
+
+    with auth_module._attempts_lock:
+        auth_module._attempts.clear()
+    yield
+    with auth_module._attempts_lock:
+        auth_module._attempts.clear()
 
 
 def test_health_reports_engine_not_connected():
@@ -338,3 +351,20 @@ def test_authenticated_track_metadata_and_audio_are_private(monkeypatch, tmp_pat
     other_listing = client.get("/api/v1/tracks", headers=other_headers)
     assert other_listing.status_code == 200
     assert all(track["id"] != track_id for track in other_listing.json())
+
+
+def test_auth_login_rate_limit_returns_retry_after(monkeypatch):
+    from app import auth as auth_module
+
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    monkeypatch.setattr(settings, "auth_login_limit", 2)
+    monkeypatch.setattr(settings, "auth_login_window_seconds", 900)
+    auth_module._attempts.clear()
+    for _ in range(2):
+        response = client.post("/api/v1/auth/login", json={"email": "nobody@example.com", "password": "wrong-password"})
+        assert response.status_code == 401
+    limited = client.post("/api/v1/auth/login", json={"email": "nobody@example.com", "password": "wrong-password"})
+    assert limited.status_code == 429
+    assert int(limited.headers["Retry-After"]) > 0
+    auth_module._attempts.clear()
