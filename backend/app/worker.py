@@ -7,7 +7,8 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import SessionLocal
-from app.model_runner import GenerationRequest, MusicModelRunner, UnconfiguredMusicModel
+from app.model_runner import GenerationRequest, MusicModelRunner
+from app.ace_step_runner import build_music_runner
 from app.models import GenerationJob, Track
 from app.storage import LocalAudioStorage
 
@@ -20,7 +21,7 @@ def process_one(
     storage: LocalAudioStorage | None = None,
 ) -> bool:
     """Claim and process one job. Return False if queue is empty."""
-    runner = runner or UnconfiguredMusicModel()
+    runner = runner or build_music_runner()
     storage = storage or LocalAudioStorage()
     with session_factory() as session:
         candidate = session.scalar(
