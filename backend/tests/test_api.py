@@ -1,7 +1,7 @@
 from collections.abc import Generator
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -300,3 +300,41 @@ def test_authenticated_job_is_hidden_from_other_user(monkeypatch):
     assert client.get(f"/api/v1/generation-jobs/{job_id}", headers={"Authorization": f"Bearer {tokens[1]}"}).status_code == 404
     listing = client.get("/api/v1/generation-jobs", headers={"Authorization": f"Bearer {tokens[1]}"})
     assert all(job["id"] != job_id for job in listing.json())
+
+
+def test_authenticated_track_metadata_and_audio_are_private(monkeypatch, tmp_path):
+    from uuid import uuid4
+
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    monkeypatch.setattr(settings, "audio_storage_dir", str(tmp_path))
+    suffix = str(uuid4())
+    tokens = []
+    for label in ("a", "b"):
+        email = f"track-owner-{label}-{suffix}@example.com"
+        assert client.post("/api/v1/auth/register", json={"email": email, "password": "owner-test-password-123"}).status_code == 201
+        login = client.post("/api/v1/auth/login", json={"email": email, "password": "owner-test-password-123"})
+        assert login.status_code == 200
+        tokens.append(login.json()["access_token"])
+
+    audio_key = LocalAudioStorage(tmp_path).save(b"private-audio-bytes", ".wav")
+    with TestingSessionLocal() as session:
+        owner_id = session.scalar(select(User.id).where(User.email == f"track-owner-a-{suffix}@example.com"))
+        job = GenerationJob(prompt="Private track A", status="succeeded", owner_id=owner_id)
+        session.add(job)
+        session.flush()
+        track = Track(job_id=job.id, title="Private track A", audio_key=audio_key, duration_seconds=5)
+        session.add(track)
+        session.commit()
+        track_id = track.id
+
+    owner_headers = {"Authorization": f"Bearer {tokens[0]}"}
+    other_headers = {"Authorization": f"Bearer {tokens[1]}"}
+    assert client.get(f"/api/v1/tracks/{track_id}", headers=owner_headers).status_code == 200
+    assert client.get(f"/api/v1/tracks/{track_id}/audio", headers=owner_headers).content == b"private-audio-bytes"
+    assert client.get(f"/api/v1/tracks/{track_id}", headers=other_headers).status_code == 404
+    assert client.get(f"/api/v1/tracks/{track_id}/audio", headers=other_headers).status_code == 404
+    other_listing = client.get("/api/v1/tracks", headers=other_headers)
+    assert other_listing.status_code == 200
+    assert all(track["id"] != track_id for track in other_listing.json())
