@@ -64,6 +64,8 @@ class AceStepHttpRunner:
                 result = json.loads(body.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise AceStepError("ACE-Step returned invalid JSON.") from exc
+            if not isinstance(result, dict):
+                raise AceStepError("ACE-Step returned a JSON value that was not an object.")
             if result.get("code", 200) != 200 or result.get("error"):
                 raise AceStepError(str(result.get("error") or "ACE-Step rejected the request."))
             return result
