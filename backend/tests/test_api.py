@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import settings
 from app.db import Base, get_db
 from app import models  # noqa: F401
+from app.models import GenerationJob, Track
 from app.main import app
 
 test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -45,6 +46,7 @@ def test_create_generation_job_queues_without_claiming_generation():
     assert data["status"] == "queued"
     assert data["style"] == "Afrobeats"
     assert data["instrumental"] is True
+    assert data["track"] is None
 
 
 def test_generation_job_rejects_too_short_prompt():
@@ -92,17 +94,65 @@ def test_system_status_shows_generation_disabled_in_production(monkeypatch):
     assert data["production_auth_ready"] is False
 
 
-
 def test_track_library_endpoints_exist():
-    response = client.get('/api/v1/tracks')
+    response = client.get("/api/v1/tracks")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
+
 def test_unknown_track_returns_404():
-    response = client.get('/api/v1/tracks/not-a-real-id')
+    response = client.get("/api/v1/tracks/not-a-real-id")
     assert response.status_code == 404
 
+
 def test_track_library_is_disabled_outside_development(monkeypatch):
-    monkeypatch.setattr(settings, 'environment', 'production')
-    response = client.get('/api/v1/tracks')
+    monkeypatch.setattr(settings, "environment", "production")
+    response = client.get("/api/v1/tracks")
     assert response.status_code == 503
+
+
+def test_completed_generation_job_includes_saved_track_metadata():
+    with TestingSessionLocal() as session:
+        job = GenerationJob(prompt="Warm Afrobeats groove", status="succeeded")
+        session.add(job)
+        session.flush()
+        track = Track(
+            job_id=job.id,
+            title="Warm Afrobeats groove",
+            audio_key="tracks/test.wav",
+            duration_seconds=30,
+        )
+        session.add(track)
+        session.commit()
+        job_id = job.id
+
+    response = client.get(f"/api/v1/generation-jobs/{job_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "succeeded"
+    assert data["track"]["title"] == "Warm Afrobeats groove"
+    assert data["track"]["audio_key"] == "tracks/test.wav"
+    assert data["track"]["duration_seconds"] == 30
+
+
+def test_queued_generation_job_has_no_track():
+    response = client.post("/api/v1/generation-jobs", json={"prompt": "Slow soulful R&B"})
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "queued"
+    assert data["track"] is None
+
+
+def test_generation_job_list_includes_track_when_available():
+    with TestingSessionLocal() as session:
+        job = GenerationJob(prompt="Instrumental test", status="succeeded")
+        session.add(job)
+        session.flush()
+        session.add(Track(job_id=job.id, title="Instrumental test", audio_key="tracks/test-2.wav", duration_seconds=24))
+        session.commit()
+
+    response = client.get("/api/v1/generation-jobs?limit=100")
+    assert response.status_code == 200
+    matched = [item for item in response.json() if item["prompt"] == "Instrumental test"]
+    assert matched
+    assert matched[0]["track"]["title"] == "Instrumental test"
