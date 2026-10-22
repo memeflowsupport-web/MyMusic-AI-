@@ -278,3 +278,25 @@ def test_auth_me_rejects_invalid_token(monkeypatch):
     monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
     response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer not-a-valid-token"})
     assert response.status_code == 401
+
+
+def test_authenticated_job_is_hidden_from_other_user(monkeypatch):
+    from uuid import uuid4
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr(settings, "auth_secret_key", "test-only-secret-key-that-is-long-enough-123456")
+    suffix = str(uuid4())
+    tokens = []
+    for label in ("a", "b"):
+        email = f"ownership-{label}-{suffix}@example.com"
+        assert client.post("/api/v1/auth/register", json={"email": email, "password": "owner-test-password-123"}).status_code == 201
+        response = client.post("/api/v1/auth/login", json={"email": email, "password": "owner-test-password-123"})
+        assert response.status_code == 200
+        tokens.append(response.json()["access_token"])
+    created = client.post("/api/v1/generation-jobs", json={"prompt": "Private song owned by user A"}, headers={"Authorization": f"Bearer {tokens[0]}"})
+    assert created.status_code == 202
+    job_id = created.json()["id"]
+    assert client.get(f"/api/v1/generation-jobs/{job_id}", headers={"Authorization": f"Bearer {tokens[0]}"}).status_code == 200
+    assert client.get(f"/api/v1/generation-jobs/{job_id}", headers={"Authorization": f"Bearer {tokens[1]}"}).status_code == 404
+    listing = client.get("/api/v1/generation-jobs", headers={"Authorization": f"Bearer {tokens[1]}"})
+    assert all(job["id"] != job_id for job in listing.json())
