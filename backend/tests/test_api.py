@@ -1,8 +1,26 @@
+from collections.abc import Generator
+
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.config import settings
+from app.db import Base, get_db
+from app import models  # noqa: F401
 from app.main import app
 
+test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+TestingSessionLocal = sessionmaker(bind=test_engine, autoflush=False, autocommit=False)
+Base.metadata.create_all(bind=test_engine)
+
+
+def override_get_db() -> Generator[Session, None, None]:
+    with TestingSessionLocal() as session:
+        yield session
+
+
+app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
@@ -14,10 +32,7 @@ def test_health_reports_engine_not_connected():
 
 
 def test_create_generation_job_queues_without_claiming_generation():
-    response = client.post(
-        "/api/v1/generation-jobs",
-        json={"prompt": "Warm Nigerian Afrobeats groove", "style": "Afrobeats", "instrumental": True},
-    )
+    response = client.post("/api/v1/generation-jobs", json={"prompt": "Warm Nigerian Afrobeats groove", "style": "Afrobeats", "instrumental": True})
     assert response.status_code == 202
     data = response.json()
     assert data["status"] == "queued"
