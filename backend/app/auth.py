@@ -1,9 +1,12 @@
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 import re
+from threading import Lock
+from time import monotonic
 from uuid import uuid4
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import InvalidTokenError
 from pwdlib import PasswordHash
@@ -18,7 +21,7 @@ from app.models import User
 router = APIRouter(prefix="/auth", tags=["authentication"])
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
-EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EMAIL_PATTERN = re.compile(r"^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 
 
 class RegisterRequest(BaseModel):
@@ -44,6 +47,41 @@ class UserResponse(BaseModel):
     created_at: datetime
 
 
+# Temporary per-process guard. It reduces accidental bursts but is NOT a
+# distributed production rate limiter: use Redis/edge limits before enabling auth.
+_RATE_LIMITS: dict[str, dict[str, object]] = {
+    "register": {"limit": 5, "window": 3600},
+    "login": {"limit": 10, "window": 900},
+}
+_attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+_attempts_lock = Lock()
+
+
+def _client_key(request: Request) -> str:
+    # Deliberately do not trust X-Forwarded-For unless a trusted proxy policy is configured.
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate_limit(action: str, request: Request) -> None:
+    policy = _RATE_LIMITS[action]
+    limit = int(policy["limit"])
+    window = float(policy["window"])
+    now = monotonic()
+    key = (action, _client_key(request))
+    with _attempts_lock:
+        bucket = _attempts[key]
+        while bucket and now - bucket[0] >= window:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            retry_after = max(1, int(window - (now - bucket[0])))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many attempts. Please wait before trying again.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+
+
 def _require_enabled() -> None:
     if not settings.auth_enabled or len(settings.auth_secret_key) < 32:
         raise HTTPException(
@@ -66,8 +104,9 @@ def _create_token(user: User) -> str:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserResponse:
+def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> UserResponse:
     _require_enabled()
+    _check_rate_limit("register", request)
     email = payload.email.strip().lower()
     if not EMAIL_PATTERN.fullmatch(email):
         raise HTTPException(status_code=422, detail="Enter a valid email address")
@@ -80,15 +119,15 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserRes
         db.commit()
     except Exception:
         db.rollback()
-        # Handles concurrent registration attempts without leaking database details.
         raise HTTPException(status_code=409, detail="An account with this email already exists") from None
     db.refresh(user)
     return _public_user(user)
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     _require_enabled()
+    _check_rate_limit("login", request)
     email = payload.email.strip().lower()
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not password_hash.verify(payload.password, user.password_hash) or not user.is_active:
@@ -124,7 +163,6 @@ def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = D
 @router.get("/me", response_model=UserResponse)
 def read_current_user(user: User = Depends(get_current_user)) -> UserResponse:
     return _public_user(user)
-
 
 
 def get_request_owner(
