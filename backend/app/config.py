@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./mymusic_dev.db"
+    audio_storage_dir: str = "./audio_storage"
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
 
     @property
