@@ -52,7 +52,8 @@ def root() -> dict[str, str]:
 @app.get("/health", tags=["system"])
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(text("SELECT 1"))
-    return {"status": "ok", "database": "ok", "music_engine": "not_connected"}
+    engine = "configured" if settings.music_model_backend.strip().lower() == "ace_step" else "not_connected"
+    return {"status": "ok", "database": "ok", "music_engine": engine}
 
 
 @app.post(f"{settings.api_prefix}/generation-jobs", response_model=GenerationJobRead, status_code=202, tags=["generation"], dependencies=[Depends(require_development_mode)])
