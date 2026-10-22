@@ -50,8 +50,8 @@ class UserResponse(BaseModel):
 # Temporary per-process guard. It reduces accidental bursts but is NOT a
 # distributed production rate limiter: use Redis/edge limits before enabling auth.
 _RATE_LIMITS: dict[str, dict[str, object]] = {
-    "register": {"limit": 5, "window": 3600},
-    "login": {"limit": 10, "window": 900},
+    "register": {"limit": settings.auth_register_limit, "window": settings.auth_register_window_seconds},
+    "login": {"limit": settings.auth_login_limit, "window": settings.auth_login_window_seconds},
 }
 _attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 _attempts_lock = Lock()
