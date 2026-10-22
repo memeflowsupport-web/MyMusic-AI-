@@ -21,7 +21,7 @@ from app.models import User
 router = APIRouter(prefix="/auth", tags=["authentication"])
 password_hash = PasswordHash.recommended()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
-EMAIL_PATTERN = re.compile(r"^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 class RegisterRequest(BaseModel):
