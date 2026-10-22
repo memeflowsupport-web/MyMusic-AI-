@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from app.config import settings
@@ -35,6 +35,9 @@ class AceStepHttpRunner:
         self.api_key = api_key if api_key is not None else settings.ace_step_api_key
         self.timeout_seconds = timeout_seconds or settings.ace_step_timeout_seconds
         self.poll_seconds = poll_seconds or settings.ace_step_poll_seconds
+        if self.timeout_seconds < 1:
+            raise ValueError("ACE_STEP_TIMEOUT_SECONDS must be at least 1 second.")
+        self._deadline: float | None = None
         if not self.base_url.startswith(("http://", "https://")):
             raise ValueError("ACE_STEP_BASE_URL must be an HTTP(S) URL.")
 
@@ -47,8 +50,11 @@ class AceStepHttpRunner:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         req = Request(urljoin(self.base_url, path.lstrip("/")), data=data, headers=headers)
+        remaining = self.timeout_seconds if self._deadline is None else self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise AceStepError("Timed out waiting for ACE-Step generation.")
         try:
-            with urlopen(req, timeout=60) as response:
+            with urlopen(req, timeout=min(60, remaining)) as response:
                 body = response.read()
                 content_type = response.headers.get("Content-Type", "")
         except (HTTPError, URLError, TimeoutError) as exc:
@@ -66,6 +72,7 @@ class AceStepHttpRunner:
     def generate(self, request: GenerationRequest) -> GeneratedAudio:
         if not request.prompt.strip():
             raise ValueError("A non-empty music prompt is required.")
+        self._deadline = time.monotonic() + self.timeout_seconds
         duration = max(10, min(600, int(settings.default_generation_duration_seconds)))
         prompt = request.prompt.strip()
         if request.style and request.style.strip():
@@ -86,9 +93,8 @@ class AceStepHttpRunner:
         if not task_id:
             raise AceStepError("ACE-Step did not return a task ID.")
 
-        deadline = time.monotonic() + self.timeout_seconds
         result_items = None
-        while time.monotonic() < deadline:
+        while time.monotonic() < self._deadline:
             response = self._request("/query_result", {"task_id_list": [task_id]})
             data = response.get("data")
             if isinstance(data, list) and data:
@@ -127,12 +133,16 @@ class AceStepHttpRunner:
         if self.api_key:
             audio_req.add_header("Authorization", f"Bearer {self.api_key}")
         try:
-            with urlopen(audio_req, timeout=60) as response:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                raise AceStepError("Timed out before generated audio could be downloaded.")
+            with urlopen(audio_req, timeout=min(60, remaining)) as response:
                 audio_data = response.read()
         except (HTTPError, URLError, TimeoutError) as exc:
             raise AceStepError(f"Could not download generated audio: {exc}") from exc
         if not audio_data:
             raise AceStepError("ACE-Step audio download was empty.")
+        self._deadline = None
         metadata = audio_item.get("metas") or {}
         actual_duration = metadata.get("duration") or duration
         return GeneratedAudio(
