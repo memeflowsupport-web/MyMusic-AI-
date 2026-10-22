@@ -19,6 +19,8 @@ class GenerationJob(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    owner: Mapped["User | None"] = relationship(back_populates="generation_jobs")
     style: Mapped[str | None] = mapped_column(String(80), nullable=True)
     instrumental: Mapped[bool] = mapped_column(default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False, index=True)
