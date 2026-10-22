@@ -33,8 +33,8 @@ class AceStepHttpRunner:
     ) -> None:
         self.base_url = (base_url or settings.ace_step_base_url).rstrip("/") + "/"
         self.api_key = api_key if api_key is not None else settings.ace_step_api_key
-        self.timeout_seconds = timeout_seconds or settings.ace_step_timeout_seconds
-        self.poll_seconds = poll_seconds or settings.ace_step_poll_seconds
+        self.timeout_seconds = settings.ace_step_timeout_seconds if timeout_seconds is None else timeout_seconds
+        self.poll_seconds = settings.ace_step_poll_seconds if poll_seconds is None else poll_seconds
         if self.timeout_seconds < 1:
             raise ValueError("ACE_STEP_TIMEOUT_SECONDS must be at least 1 second.")
         self._deadline: float | None = None
