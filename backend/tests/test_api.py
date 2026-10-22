@@ -62,3 +62,32 @@ def test_generation_api_is_disabled_outside_development(monkeypatch):
     response = client.post("/api/v1/generation-jobs", json={"prompt": "Afrobeat song idea"})
     assert response.status_code == 503
     assert "authentication" in response.json()["detail"]
+
+
+def test_system_status_does_not_claim_model_is_connected():
+    response = client.get("/api/v1/system/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["music_engine"] == "not_connected"
+    assert data["generation_api_enabled"] is True
+    assert data["production_auth_ready"] is False
+    assert "not connected" in data["music_engine_message"]
+
+
+def test_system_status_marks_ace_step_as_unverified(monkeypatch):
+    monkeypatch.setattr(settings, "music_model_backend", "ace_step")
+    response = client.get("/api/v1/system/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["music_engine"] == "configured_unverified"
+    assert "not been verified" in data["music_engine_message"]
+
+
+def test_system_status_shows_generation_disabled_in_production(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "production")
+    response = client.get("/api/v1/system/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["generation_api_enabled"] is False
+    assert data["production_auth_ready"] is False
+
