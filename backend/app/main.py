@@ -43,7 +43,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -149,7 +149,7 @@ def get_track(track_id: str, db: Session = Depends(get_db), owner: User | None =
 
 @app.get(f"{settings.api_prefix}/tracks/{{track_id}}/audio", tags=["tracks"], dependencies=[Depends(require_development_mode)])
 def play_track_audio(track_id: str, db: Session = Depends(get_db), owner: User | None = Depends(get_request_owner)) -> FileResponse:
-    """Stream a completed track inline; this route is disabled outside development until auth exists."""
+    """Stream a completed track inline; this route remains disabled in production."""
     track = db.scalar(select(Track).join(GenerationJob).where(Track.id == track_id, GenerationJob.owner_id == (owner.id if owner else None)))
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
