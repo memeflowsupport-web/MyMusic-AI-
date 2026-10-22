@@ -1,5 +1,7 @@
 from collections.abc import Generator
 
+import pytest
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +26,17 @@ def override_get_db() -> Generator[Session, None, None]:
 
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_rate_limits():
+    from app import auth as auth_module
+
+    with auth_module._attempts_lock:
+        auth_module._attempts.clear()
+    yield
+    with auth_module._attempts_lock:
+        auth_module._attempts.clear()
 
 
 def test_health_reports_engine_not_connected():
