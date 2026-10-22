@@ -124,3 +124,14 @@ def get_current_user(token: str | None = Depends(oauth2_scheme), db: Session = D
 @router.get("/me", response_model=UserResponse)
 def read_current_user(user: User = Depends(get_current_user)) -> UserResponse:
     return _public_user(user)
+
+
+
+def get_request_owner(
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Allow anonymous access only while auth is explicitly disabled (development prototype)."""
+    if not settings.auth_enabled:
+        return None
+    return get_current_user(token=token, db=db)
