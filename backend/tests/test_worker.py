@@ -30,6 +30,16 @@ class MissingRunner:
         raise ModelNotConfiguredError("No model installed")
 
 
+class EmptyAudioRunner:
+    def generate(self, request):
+        return GeneratedAudio(b"", "Empty", 12, ".wav")
+
+
+class InvalidDurationRunner:
+    def generate(self, request):
+        return GeneratedAudio(b"test-audio-bytes", "Invalid duration", 0, ".wav")
+
+
 def create_job(factory):
     with factory() as session:
         job = GenerationJob(prompt="Afrobeat at 100 BPM", style="Afrobeat", instrumental=True)
@@ -58,6 +68,23 @@ def test_worker_saves_runner_output(session_factory, tmp_path):
         assert job.status == "succeeded"
         assert track.title == "Test track"
         assert storage.read(track.audio_key) == b"test-audio-bytes"
+
+
+@pytest.mark.parametrize(
+    ("runner", "message"),
+    [
+        (EmptyAudioRunner(), "empty audio"),
+        (InvalidDurationRunner(), "invalid duration"),
+    ],
+)
+def test_worker_rejects_invalid_model_output(session_factory, tmp_path, runner, message):
+    job_id = create_job(session_factory)
+    assert process_one(session_factory, runner, LocalAudioStorage(tmp_path))
+    with session_factory() as session:
+        job = session.get(GenerationJob, job_id)
+        assert job.status == "failed"
+        assert message in job.error_message.lower()
+        assert session.query(Track).count() == 0
 
 
 def test_worker_returns_false_when_queue_empty(session_factory, tmp_path):
