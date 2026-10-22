@@ -43,5 +43,5 @@ The adapter submits a `/release_task`, polls `/query_result`, and downloads the 
 - This connection has not yet been verified against a running model instance, and no actual song has been generated from this repository yet.
 - Generation endpoints return HTTP 503 outside development because authentication and abuse controls are not implemented.
 - Local disk storage is for development/single-machine testing. Production needs authenticated users, per-user ownership, rate limits/quotas, private object storage, database migrations, monitoring, backups, retention rules, and a reliable queue.
-- If the worker process is killed after claiming a job, that job may remain `running`; stale-job recovery is still needed before production.
+- If the worker process is killed after claiming a job, that job may remain `running`. An operator can call `fail_stale_running_jobs(session_factory, stale_after_seconds=3600)` from `app.worker` to mark sufficiently old running jobs as failed. First stop all workers and confirm no generation is still active; recovery is deliberately manual to avoid interrupting a slow but healthy model request. The caller should use the same database as the worker.
 - Verify the model version, checkpoint and license for your intended use. See `docs/MUSIC_MODEL_EVALUATION.md`.
