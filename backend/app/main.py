@@ -52,7 +52,7 @@ def root() -> dict[str, str]:
 @app.get("/health", tags=["system"])
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(text("SELECT 1"))
-    engine = "configured" if settings.music_model_backend.strip().lower() == "ace_step" else "not_connected"
+    engine = "configured_unverified" if settings.music_model_backend.strip().lower() == "ace_step" else "not_connected"
     return {"status": "ok", "database": "ok", "music_engine": engine}
 
 
