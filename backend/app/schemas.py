@@ -13,6 +13,17 @@ class GenerationJobCreate(BaseModel):
     instrumental: bool = False
 
 
+class TrackRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    job_id: str
+    title: str
+    audio_key: str | None
+    duration_seconds: int | None
+    created_at: datetime
+
+
 class GenerationJobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -24,14 +35,4 @@ class GenerationJobRead(BaseModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
-
-
-class TrackRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    job_id: str
-    title: str
-    audio_key: str | None
-    duration_seconds: int | None
-    created_at: datetime
+    track: TrackRead | None = None
