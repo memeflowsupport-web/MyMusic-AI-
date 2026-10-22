@@ -1,6 +1,6 @@
-from io import BytesIO
+import pytest
 
-from app.ace_step_runner import AceStepHttpRunner
+from app.ace_step_runner import AceStepError, AceStepHttpRunner
 from app.model_runner import GenerationRequest
 
 
@@ -66,3 +66,37 @@ def test_ace_step_rejects_audio_url_from_another_host():
         assert "unexpected host" in str(exc).lower()
     else:
         raise AssertionError("Unexpected external audio URL should be rejected")
+
+
+
+def test_ace_step_reports_generation_failure():
+    class FakeRunner(AceStepHttpRunner):
+        def _request(self, path, payload=None):
+            if path == "/release_task":
+                return {"data": {"task_id": "task-fail"}}
+            return {"data": [{"task_id": "task-fail", "status": 2, "result": "[]"}]}
+
+    runner = FakeRunner(base_url="http://127.0.0.1:8001", timeout_seconds=5)
+    with pytest.raises(AceStepError, match="generation failed"):
+        runner.generate(GenerationRequest("A song", None, False))
+
+
+def test_ace_step_rejects_malformed_result_json():
+    class FakeRunner(AceStepHttpRunner):
+        def _request(self, path, payload=None):
+            if path == "/release_task":
+                return {"data": {"task_id": "task-bad-json"}}
+            return {"data": [{
+                "task_id": "task-bad-json",
+                "status": 1,
+                "result": "{not valid json",
+            }]}
+
+    runner = FakeRunner(base_url="http://127.0.0.1:8001", timeout_seconds=5)
+    with pytest.raises(AceStepError, match="malformed generation results"):
+        runner.generate(GenerationRequest("A song", None, False))
+
+
+def test_ace_step_requires_positive_timeout():
+    with pytest.raises(ValueError, match="at least 1 second"):
+        AceStepHttpRunner(base_url="http://127.0.0.1:8001", timeout_seconds=0)
