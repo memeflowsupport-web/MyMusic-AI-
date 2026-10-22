@@ -6,6 +6,7 @@ Before enabling authentication in a production environment:
 
 1. Back up the database.
 2. Apply `001_create_users.sql` to the configured PostgreSQL database using your database's migration/SQL console.
+3. Apply `002_generation_job_owner.sql` to add the nullable owner reference to existing generation jobs.
 3. Verify the `users` table and unique email constraint exist.
 4. Set `AUTH_SECRET_KEY` to a unique random secret of at least 32 characters in the hosting provider's secret environment settings. Never commit it to Git.
 5. Set `AUTH_ENABLED=true` only after registration rate limits, monitoring, and database backups are in place.
