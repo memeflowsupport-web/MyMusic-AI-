@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,6 +10,7 @@ from app.config import settings
 from app.db import Base, engine, get_db
 from app import models  # noqa: F401
 from app.models import GenerationJob, Track
+from app.storage import LocalAudioStorage
 from app.schemas import GenerationJobCreate, GenerationJobRead, TrackRead
 
 
@@ -125,3 +127,39 @@ def get_track(track_id: str, db: Session = Depends(get_db)) -> Track:
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return track
+
+
+@app.get(f"{settings.api_prefix}/tracks/{{track_id}}/audio", tags=["tracks"], dependencies=[Depends(require_development_mode)])
+def play_track_audio(track_id: str, db: Session = Depends(get_db)) -> FileResponse:
+    """Stream a completed track inline; this route is disabled outside development until auth exists."""
+    track = db.get(Track, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if track.job.status != "succeeded":
+        raise HTTPException(status_code=409, detail="Track is not ready for playback")
+    if not track.audio_key:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    try:
+        audio_path = LocalAudioStorage().path_for_read(track.audio_key)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Audio file not found") from None
+
+    media_types = {
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+        ".opus": "audio/ogg",
+    }
+    media_type = media_types.get(audio_path.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=415, detail="Unsupported audio format")
+
+    return FileResponse(
+        audio_path,
+        media_type=media_type,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
