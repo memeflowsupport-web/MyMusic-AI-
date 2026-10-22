@@ -12,7 +12,8 @@ from app import models  # noqa: F401
 from app.models import GenerationJob, Track
 from app.storage import LocalAudioStorage
 from app.schemas import GenerationJobCreate, GenerationJobRead, TrackRead
-from app.auth import router as auth_router
+from app.auth import get_request_owner, router as auth_router
+from app.models import User
 
 
 @asynccontextmanager
@@ -93,9 +94,10 @@ def system_status() -> dict[str, str | bool]:
 
 
 @app.post(f"{settings.api_prefix}/generation-jobs", response_model=GenerationJobRead, status_code=202, tags=["generation"], dependencies=[Depends(require_development_mode)])
-def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(get_db)) -> GenerationJob:
+def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(get_db), owner: User | None = Depends(get_request_owner)) -> GenerationJob:
     job = GenerationJob(
         prompt=payload.prompt.strip(),
+        owner_id=owner.id if owner else None,
         style=payload.style.strip() if payload.style and payload.style.strip() else None,
         instrumental=payload.instrumental,
         status="queued",
@@ -110,14 +112,16 @@ def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(ge
 def list_generation_jobs(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
+    owner: User | None = Depends(get_request_owner),
 ) -> list[GenerationJob]:
-    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).order_by(GenerationJob.created_at.desc()).limit(limit)
+    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).order_by(GenerationJob.created_at.desc())
+    statement = statement.where(GenerationJob.owner_id == (owner.id if owner else None)).limit(limit)
     return list(db.scalars(statement))
 
 
 @app.get(f"{settings.api_prefix}/generation-jobs/{{job_id}}", response_model=GenerationJobRead, tags=["generation"], dependencies=[Depends(require_development_mode)])
-def get_generation_job(job_id: str, db: Session = Depends(get_db)) -> GenerationJob:
-    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).where(GenerationJob.id == job_id)
+def get_generation_job(job_id: str, db: Session = Depends(get_db), owner: User | None = Depends(get_request_owner)) -> GenerationJob:
+    statement = select(GenerationJob).options(selectinload(GenerationJob.track)).where(GenerationJob.id == job_id, GenerationJob.owner_id == (owner.id if owner else None))
     job = db.scalar(statement)
     if job is None:
         raise HTTPException(status_code=404, detail="Generation job not found")
@@ -128,23 +132,25 @@ def get_generation_job(job_id: str, db: Session = Depends(get_db)) -> Generation
 def list_tracks(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
+    owner: User | None = Depends(get_request_owner),
 ) -> list[Track]:
-    """List saved track metadata, newest first. Audio files are not exposed publicly."""
-    return list(db.scalars(select(Track).order_by(Track.created_at.desc()).limit(limit)))
+    """List saved track metadata owned by the current user."""
+    statement = select(Track).join(GenerationJob).where(GenerationJob.owner_id == (owner.id if owner else None)).order_by(Track.created_at.desc()).limit(limit)
+    return list(db.scalars(statement))
 
 
 @app.get(f"{settings.api_prefix}/tracks/{{track_id}}", response_model=TrackRead, tags=["tracks"], dependencies=[Depends(require_development_mode)])
-def get_track(track_id: str, db: Session = Depends(get_db)) -> Track:
-    track = db.get(Track, track_id)
+def get_track(track_id: str, db: Session = Depends(get_db), owner: User | None = Depends(get_request_owner)) -> Track:
+    track = db.scalar(select(Track).join(GenerationJob).where(Track.id == track_id, GenerationJob.owner_id == (owner.id if owner else None)))
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return track
 
 
 @app.get(f"{settings.api_prefix}/tracks/{{track_id}}/audio", tags=["tracks"], dependencies=[Depends(require_development_mode)])
-def play_track_audio(track_id: str, db: Session = Depends(get_db)) -> FileResponse:
+def play_track_audio(track_id: str, db: Session = Depends(get_db), owner: User | None = Depends(get_request_owner)) -> FileResponse:
     """Stream a completed track inline; this route is disabled outside development until auth exists."""
-    track = db.get(Track, track_id)
+    track = db.scalar(select(Track).join(GenerationJob).where(Track.id == track_id, GenerationJob.owner_id == (owner.id if owner else None)))
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     if track.job.status != "succeeded":
