@@ -9,6 +9,7 @@ from app.config import settings
 from app.db import Base, get_db
 from app import models  # noqa: F401
 from app.models import GenerationJob, Track
+from app.storage import LocalAudioStorage
 from app.main import app
 
 test_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -156,3 +157,60 @@ def test_generation_job_list_includes_track_when_available():
     matched = [item for item in response.json() if item["prompt"] == "Instrumental test"]
     assert matched
     assert matched[0]["track"]["title"] == "Instrumental test"
+
+
+
+def test_saved_track_audio_endpoint_streams_completed_audio(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "audio_storage_dir", str(tmp_path))
+    audio_key = LocalAudioStorage(tmp_path).save(b"fake-wav-audio", ".wav")
+    with TestingSessionLocal() as session:
+        job = GenerationJob(prompt="Playback test", status="succeeded")
+        session.add(job)
+        session.flush()
+        track = Track(job_id=job.id, title="Playback test", audio_key=audio_key, duration_seconds=5)
+        session.add(track)
+        session.commit()
+        track_id = track.id
+
+    response = client.get(f"/api/v1/tracks/{track_id}/audio")
+    assert response.status_code == 200
+    assert response.content == b"fake-wav-audio"
+    assert response.headers["content-type"].startswith("audio/wav")
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_audio_endpoint_hides_missing_audio_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "audio_storage_dir", str(tmp_path))
+    with TestingSessionLocal() as session:
+        job = GenerationJob(prompt="Missing audio test", status="succeeded")
+        session.add(job)
+        session.flush()
+        track = Track(job_id=job.id, title="Missing audio test", audio_key="missing.wav", duration_seconds=5)
+        session.add(track)
+        session.commit()
+        track_id = track.id
+
+    response = client.get(f"/api/v1/tracks/{track_id}/audio")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Audio file not found"
+
+
+def test_audio_endpoint_rejects_track_not_completed():
+    with TestingSessionLocal() as session:
+        job = GenerationJob(prompt="Not ready test", status="running")
+        session.add(job)
+        session.flush()
+        track = Track(job_id=job.id, title="Not ready test", audio_key="not-ready.wav", duration_seconds=5)
+        session.add(track)
+        session.commit()
+        track_id = track.id
+
+    response = client.get(f"/api/v1/tracks/{track_id}/audio")
+    assert response.status_code == 409
+
+
+def test_audio_endpoint_is_disabled_outside_development(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "production")
+    response = client.get("/api/v1/tracks/some-track-id/audio")
+    assert response.status_code == 503
