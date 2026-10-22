@@ -67,7 +67,7 @@ def system_status() -> dict[str, str | bool]:
         engine_message = "ACE-Step adapter selected; live model server has not been verified."
     else:
         engine_status = "not_connected"
-        engine_message = "No music-generation model is connected."
+        engine_message = "Music model not connected."
 
     return {
         "application": settings.app_name,
