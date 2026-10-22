@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.main import app
 
 client = TestClient(app)
@@ -32,3 +33,10 @@ def test_generation_job_rejects_too_short_prompt():
 def test_unknown_job_returns_404():
     response = client.get("/api/v1/generation-jobs/not-a-real-id")
     assert response.status_code == 404
+
+
+def test_generation_api_is_disabled_outside_development(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "production")
+    response = client.post("/api/v1/generation-jobs", json={"prompt": "Afrobeat song idea"})
+    assert response.status_code == 503
+    assert "authentication" in response.json()["detail"]
