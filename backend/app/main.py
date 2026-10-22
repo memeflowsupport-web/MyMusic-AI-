@@ -56,6 +56,29 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok", "database": "ok", "music_engine": engine}
 
 
+
+@app.get(f"{settings.api_prefix}/system/status", tags=["system"])
+def system_status() -> dict[str, str | bool]:
+    """Report setup readiness without exposing secrets or claiming model reachability."""
+    backend = settings.music_model_backend.strip().lower()
+    if backend == "ace_step":
+        engine_status = "configured_unverified"
+        engine_message = "ACE-Step adapter selected; live model server has not been verified."
+    else:
+        engine_status = "not_connected"
+        engine_message = "No music-generation model is connected."
+
+    return {
+        "application": settings.app_name,
+        "environment": settings.environment,
+        "database_configuration": "configured",
+        "music_engine": engine_status,
+        "music_engine_message": engine_message,
+        "generation_api_enabled": settings.environment == "development",
+        "production_auth_ready": False,
+    }
+
+
 @app.post(f"{settings.api_prefix}/generation-jobs", response_model=GenerationJobRead, status_code=202, tags=["generation"], dependencies=[Depends(require_development_mode)])
 def create_generation_job(payload: GenerationJobCreate, db: Session = Depends(get_db)) -> GenerationJob:
     job = GenerationJob(
